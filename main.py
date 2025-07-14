@@ -1,73 +1,110 @@
+"""A module with simple (for now) DataFrame functionality."""
+
+from collections import defaultdict
+from datetime import datetime
+
+
 class DataFrame:
-    def __init__(self, data: dict):
-        # Генерираме списък от дължините на всички колони
-        lengths = [len(v) for v in data.values()]
-        # Проверяваме дали има подадени колони и дали всички са с еднаква дължина
-        if not lengths or any(length != lengths[0] for length in lengths):
-            raise ValueError("Всички колони трябва да са с еднакъв брой елементи")
-        # Запаметяваме реда на колоните
-        self._columns = list(data.keys())
-        # Копираме данните във вътрешен речник, за да не модифицираме външния
-        self._data = {col: list(data[col]) for col in self._columns}
+    """Column-based data frame."""
+
+    def __init__(self, column_definitions):
+        """Validate input structure and initialize the data frame."""
+        self._validate_input_type(column_definitions)
+        for column in column_definitions.values():
+            self.is_valid_column(column)
+        self.column_definitions = column_definitions
+
+    @classmethod
+    def from_rows(cls, rows):
+        """Create a DataFrame object from an iterable consisting of rows."""
+        column_definitions = defaultdict(list)
+        for row in rows:
+            for column, value in row.items():
+                column_definitions[column].append(value)
+        return cls(column_definitions)
+
+    def is_valid_column(self, column):
+        """Verify if a column has members of the same type."""
+        item_type = type(column[0])
+        for item in column[1:]:
+            if not isinstance(item, item_type):
+                raise TypeError("Inconsistent column types.")
+        return True
+
+    def _validate_input_type(self, column_definitions):
+        if not isinstance(column_definitions, dict):
+            raise TypeError("Cannot instantiate with anything different then a dictionary.")
 
     @property
     def shape(self):
-        # Брой редове = дължина на първата колона (или 0 ако няма колони)
-        rows = len(next(iter(self._data.values()), []))
-        # Брой колони = дължина на списъка с имена на колони
-        cols = len(self._columns)
-        return (rows, cols)
+        """Size of the DataFrame (rows, cows)."""
+        len_rows = max(len(row) for row in self.column_definitions.values())
+        len_cols = len(self.column_definitions)
+        return len_rows, len_cols
 
-    def __getitem__(self, column):
-        # Достъп до колона за четене: df["column"]
-        if column not in self._data:
-            raise KeyError(f"Няма такава колона: {column!r}")
-        return self._data[column]
+    def __getitem__(self, column_name):
+        """Allow for indexing by column name."""
+        return self.column_definitions[column_name]
 
-    def __setitem__(self, column, values):
-        # Достъп до колона за запис: df["column"] = values
-        rows = self.shape[0]
-        # Проверяваме дали дължината на новата колона съвпада с броя редове
-        if len(values) != rows:
-            raise ValueError(f"Дължината на колоната ({len(values)}) не съвпада с броя редове ({rows})")
-        # Ако колоната не съществува, я добавяме в списъка с имена
-        if column not in self._columns:
-            self._columns.append(column)
-        # Записваме или презаписваме стойностите във вътрешния речник
-        self._data[column] = list(values)
+    def __setitem__(self, name, value):
+        """Allow for setting of a whole column."""
+        self.is_valid_column(value)
+        self.column_definitions[name] = value
 
     def __str__(self):
-        # Форматираме заглавния ред: име на колони, разделени с " | "
-        header = " | ".join(self._columns)
-        # Сглобяваме всеки ред от таблицата
-        rows = []
-        for i in range(self.shape[0]):
-            # Взимаме i-тата стойност от всяка колона
-            row = [str(self._data[col][i]) for col in self._columns]
-            rows.append(" | ".join(row))
-        table = "\n".join(rows)
-        # Връщаме низ с размерността, заглавния ред и данните
-        return f"DataFrame ({self.shape[0]}×{self.shape[1]})\n{header}\n{table}"
+        """Represent DataFrame as a string with it's size and contents."""
+        table = PrettyTable()
+        table.field_names = self.column_definitions.keys()
+        table.add_rows(row for row in zip(*self.column_definitions.values()))
+        return f"DataFrame (2x3)\n{table!s}"
 
-    # За да имаме еднакво представяне и в интерактивен режим
-    __repr__ = __str__
+    def __bool__(self):
+        """Evaluate truthiness of the DataFrame, depending on whether or not it's empty."""
+        return bool(self.column_definitions)
 
 
-if __name__ == "__main__":
-    # Създаваме DataFrame с две колони: name и age
-    df = DataFrame({
-        "name": ["Гошо", "Пешо"],
-        "age": [30, 16]
-    })
-    print(df.shape)         # (2, 2)
-    print(df["name"])       # ['Гошо', 'Пешо']
+df = DataFrame({"date": [1, 2, 3, 4]})
 
-    # Добавяме нова колона height
-    df["height"] = [175, "по-висок от Стан"]
-    print(df.shape)         # (2, 3)
-    print(df)
-    # Резултат:
-    # DataFrame (2×3)
-    # name | age | height
-    # Гошо  | 30  | 175
-    # Пешо  | 16  | по-висок от Стан
+
+def validate_column_types(**column_restrictions):
+    """Decorate a function to check if columns with a certain name have a specific content type."""
+
+    def decorator(func):
+        def decorated(df, **kwargs):
+            if not isinstance(df, DataFrame):
+                raise TypeError(f"Object {df} is not a DataFrame.")
+            for column, column_type in column_restrictions.items():
+                if not isinstance(df[column][0], column_type):
+                    raise TypeError(f"Type for column {column} must be {column_type}.")
+            return func(df, **kwargs)
+
+        return decorated
+
+    return decorator
+
+
+@validate_column_types(date=datetime)
+def extract_time_interval(df):
+    """Extract the interval from the earliest to the latest date in a DataFrame."""
+    dates = sorted(df["date"])
+    return dates[-1] - dates[0]
+
+
+def require_non_empty(func):
+    """Decorate a function to require a DataFrame with size > (0, 0)."""
+
+    def decorated(df, **kwargs):
+        if not isinstance(df, DataFrame):
+            raise TypeError(f"Object {df} is not a DataFrame.")
+        if not df:
+            raise TypeError(f"Empty DataFrame not allowed for {func.__name__}.")
+        return func(df, **kwargs)
+
+    return decorated
+
+
+@require_non_empty
+def avg(df, /, column_name):
+    """Find the average value for a specific column."""
+    column = df[column_name]
+    return sum(column) / len(column)
